@@ -168,7 +168,13 @@ def _print_summary(
     if result.momentum_theory_warning:
         print(f"\n[WARNING] {result.momentum_theory_warning}")
 
-    print(f"\nOVERALL: {'ALL FILTERS PASS' if result.all_pass else 'ONE OR MORE FILTERS FAILED'}")
+    if not result.eligible:
+        overall = "NOT ELIGIBLE (a hard/disqualifying constraint failed)"
+    elif result.all_pass:
+        overall = "ELIGIBLE, ALL FILTERS PASS"
+    else:
+        overall = "ELIGIBLE, but a soft objective was missed (see FAIL lines above)"
+    print(f"\nOVERALL: {overall}")
 
 
 def _add_cli_args(parser: argparse.ArgumentParser) -> None:

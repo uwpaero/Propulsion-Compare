@@ -75,6 +75,7 @@ def test_evaluate_candidate_reports_all_filters_never_drops():
     assert filter_names == {
         "tip_mach",
         "current_per_motor",
+        "current_esc",
         "current_pack",
         "power",
         "pitch_speed",
@@ -82,8 +83,8 @@ def test_evaluate_candidate_reports_all_filters_never_drops():
         "prop_efficiency",
         "distance",
     }
-    # All 8 filters must be present regardless of pass/fail.
-    assert len(result.filters) == 8
+    # All 9 filters must be present regardless of pass/fail.
+    assert len(result.filters) == 9
 
 
 def test_candidate_result_not_low_confidence_for_tabulated_prop():
@@ -101,16 +102,22 @@ def test_candidate_result_low_confidence_for_parametric_prop():
     assert result.is_low_confidence is True
 
 
-def test_current_per_motor_filter_uses_min_of_esc_and_motor_limits():
-    # ESC continuous limit is the binding (lowest) constraint here.
+def test_current_motor_and_esc_limits_are_separate_auditable_filters():
+    # ESC continuous limit is far below the motor's own rating -- split
+    # filters mean this shows up as an ESC failure with the motor filter
+    # still passing, instead of both silently folded into one min().
     spec = CandidateSpec(
-        motor=make_motor(i_max_cont_a=60.0), prop=make_prop(), esc_current_cont_a=5.0
+        motor=make_motor(i_max_cont_a=150.0), prop=make_prop(), esc_current_cont_a=5.0
     )
     result = evaluate_candidate(spec, make_requirement(), make_battery())
-    current_filter = next(f for f in result.filters if f.name == "current_per_motor")
-    assert current_filter.threshold == pytest.approx(5.0)
-    # With such a low ESC limit the candidate should fail the per-motor current filter.
-    assert current_filter.passed is False
+    motor_filter = next(f for f in result.filters if f.name == "current_per_motor")
+    esc_filter = next(f for f in result.filters if f.name == "current_esc")
+    assert motor_filter.threshold == pytest.approx(150.0)
+    assert motor_filter.passed is True
+    assert esc_filter.threshold == pytest.approx(5.0)
+    assert esc_filter.passed is False
+    assert esc_filter.hard is True
+    assert result.eligible is False
     assert result.all_pass is False
 
 
@@ -129,9 +136,12 @@ def test_current_filters_not_evaluated_when_no_limits_configured():
     requirement = make_requirement()
     result = evaluate_candidate(spec, requirement, make_battery())
     per_motor_filter = next(f for f in result.filters if f.name == "current_per_motor")
+    esc_filter = next(f for f in result.filters if f.name == "current_esc")
     pack_filter = next(f for f in result.filters if f.name == "current_pack")
     assert per_motor_filter.evaluated is False
     assert per_motor_filter.passed is True
+    assert esc_filter.evaluated is False
+    assert esc_filter.passed is True
     assert pack_filter.evaluated is False
     assert pack_filter.passed is True
 
@@ -188,8 +198,9 @@ def test_distance_filter_fails_gracefully_when_infeasible():
     assert result.distance_m == math.inf
     assert result.distance_margin_pct is None
     assert not result.all_pass
+    assert not result.eligible
     # Result must still carry every other filter, not just bail out.
-    assert len(result.filters) == 8
+    assert len(result.filters) == 9
 
 
 def test_tip_mach_and_efficiency_values_are_sane():
@@ -207,4 +218,30 @@ def test_evaluate_candidates_runs_full_cross_product():
     specs = [CandidateSpec(motor=m, prop=p) for m in motors for p in props]
     results = evaluate_candidates(specs, make_requirement(), make_battery())
     assert len(results) == len(specs)
-    assert all(len(r.filters) == 8 for r in results)
+    assert all(len(r.filters) == 9 for r in results)
+
+
+def test_motor_efficiency_failure_is_soft_not_disqualifying():
+    # An unreachable efficiency threshold, with no hard current/power limits
+    # configured -- the candidate should still be eligible (legal to build),
+    # just not "optimal": failing a soft objective is wasteful, not unsafe.
+    spec = CandidateSpec(motor=make_motor(i_max_cont_a=None), prop=make_prop())
+    requirement = make_requirement(motor_eta_threshold=0.999)
+    result = evaluate_candidate(spec, requirement, make_battery())
+    eta_filter = next(f for f in result.filters if f.name == "motor_efficiency")
+    assert eta_filter.passed is False
+    assert eta_filter.hard is False
+    assert result.eligible is True
+    assert result.all_pass is False
+
+
+def test_current_per_motor_times_motor_count_equals_pack_current():
+    # The whole N-motor architecture's current advantage rests on this
+    # division being exact and driven by motor_count, not hardcoded --
+    # confirmed here at the reported (GUI-facing) values, not just internally.
+    result = evaluate_candidate(
+        CandidateSpec(motor=make_motor(i_max_cont_a=None), prop=make_prop(), motor_count=4),
+        make_requirement(),
+        make_battery(),
+    )
+    assert result.current_max_pack_a == pytest.approx(4 * result.current_max_per_motor_a, rel=1e-9)

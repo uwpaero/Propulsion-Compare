@@ -7,7 +7,8 @@ combination that misses one filter by a hair is still visible next to one
 that misses badly.
 
     Tip Mach:       M_tip = sqrt((pi*n*D)^2 + V^2) / a        <= tip_mach_limit
-    Current/motor:  max I(V) (per motor) <= min(ESC_cont, motor_cont)
+    Current/motor:  max I(V) (per motor) <= motor continuous rating
+    Current/ESC:    max I(V) (per motor) <= ESC continuous rating
     Current/pack:   max I_pack(V) <= C_rate*capacity (if set)
     Power:          max P_elec (total, all motors) <= power_limit_w (if set)
     Pitch speed:    V_pitch = n*pitch at V_t, report ratio V_pitch/V_t
@@ -22,6 +23,16 @@ is a pack-level limit on the summed current of every motor. Thrust, shaft
 power, and electrical power are aggregates across all motors; tip Mach,
 pitch speed, and both efficiencies are per-motor (symmetric, so identical
 across motors).
+
+The motor and ESC continuous-current ratings are reported as two separate
+filters rather than pre-collapsed with ``min()`` -- folding them together
+hides which one actually binds, and that accounting error is exactly what
+bit us before. Each ``FilterResult`` also carries ``hard``: hard filters
+(tip Mach, both current checks, power, distance) are disqualifying --
+failing one means the combination is not eligible to fly. Soft filters
+(motor efficiency) are objectives -- failing one is wasteful, not unsafe.
+``CandidateResult.eligible`` reports the hard-only verdict; ``all_pass``
+keeps its original meaning of "every filter, hard and soft."
 """
 
 from __future__ import annotations
@@ -46,6 +57,15 @@ from propselect.core.takeoff import AircraftConfig, GroundRollResult, integrate_
 # max power, max tip Mach, peak prop efficiency). This is independent of the
 # ground-roll integration grid.
 DIAGNOSTIC_SWEEP_POINTS: int = 61
+
+# A ground roll needing many multiples of the allowed distance, or an
+# absurdly long time, isn't a "bad" result -- it's near-zero net
+# acceleration blowing up into a large-but-finite artifact (see
+# takeoff.integrate_kinematics). These are generous on purpose: a genuine
+# near-miss (e.g. 1.2x the allowed distance) must still come back as a real
+# finite number with a margin, not get swallowed by the cap.
+RUNAWAY_DISTANCE_FACTOR: float = 5.0
+RUNAWAY_MAX_TIME_S: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,9 @@ class FilterResult:
         threshold: threshold checked against, if configured.
         evaluated: False if the filter had no threshold configured (e.g. no
             power limit set) and was therefore not actually constraining.
+        hard: True if failing this filter disqualifies the candidate
+            (unsafe/infeasible). False for soft objectives, where failing
+            means wasteful, not unsafe.
         detail: human-readable summary.
     """
 
@@ -119,6 +142,7 @@ class FilterResult:
     value: float | None
     threshold: float | None
     evaluated: bool = True
+    hard: bool = True
     detail: str = ""
 
 
@@ -131,6 +155,7 @@ class CandidateResult:
     diagnostic_operating_points: list[OperatingPointResult]
     filters: list[FilterResult]
     all_pass: bool
+    eligible: bool
     is_low_confidence: bool
     distance_m: float
     distance_margin_pct: float | None
@@ -152,16 +177,6 @@ def _tip_mach(n_rev_s: float, diameter_m: float, v_m_s: float, speed_of_sound_m_
     """M_tip = sqrt((pi*n*D)^2 + V^2) / a."""
     tip_speed_m_s = math.pi * n_rev_s * diameter_m
     return math.sqrt(tip_speed_m_s**2 + v_m_s**2) / speed_of_sound_m_s
-
-
-def _per_motor_current_limit_a(motor: MotorSpec, esc_current_cont_a: float | None) -> float | None:
-    """min(ESC_cont, motor_cont), the per-motor current limit."""
-    candidates = []
-    if motor.i_max_cont_a is not None:
-        candidates.append(motor.i_max_cont_a)
-    if esc_current_cont_a is not None:
-        candidates.append(esc_current_cont_a)
-    return min(candidates) if candidates else None
 
 
 def _pack_current_limit_a(c_rate_limit: float | None, capacity_ah: float | None) -> float | None:
@@ -186,6 +201,8 @@ def evaluate_candidate(
         dv_m_s=requirement.dv_m_s,
         initial_soc=requirement.initial_soc,
         motor_count=spec.motor_count,
+        max_distance_m=requirement.distance_allowed_m * RUNAWAY_DISTANCE_FACTOR,
+        max_time_s=RUNAWAY_MAX_TIME_S,
     )
 
     # Diagnostic sweep 0 -> 1.2*V_t for max current/power/tip-Mach and peak
@@ -243,7 +260,8 @@ def evaluate_candidate(
         v_pitch_ratio = v_pitch_m_s / requirement.v_t_m_s
 
     capacity_ah = getattr(battery, "capacity_ah", None)
-    per_motor_current_limit = _per_motor_current_limit_a(spec.motor, spec.esc_current_cont_a)
+    motor_current_limit = spec.motor.i_max_cont_a
+    esc_current_limit = spec.esc_current_cont_a
     pack_current_limit = _pack_current_limit_a(requirement.c_rate_limit, capacity_ah)
 
     filters: list[FilterResult] = []
@@ -261,14 +279,29 @@ def evaluate_candidate(
     filters.append(
         FilterResult(
             name="current_per_motor",
-            passed=(per_motor_current_limit is None) or (current_max_per_motor_a <= per_motor_current_limit),
+            passed=(motor_current_limit is None) or (current_max_per_motor_a <= motor_current_limit),
             value=current_max_per_motor_a,
-            threshold=per_motor_current_limit,
-            evaluated=per_motor_current_limit is not None,
+            threshold=motor_current_limit,
+            evaluated=motor_current_limit is not None,
             detail=(
-                f"I max {current_max_per_motor_a:.2f} A/motor vs limit {per_motor_current_limit:.2f} A"
-                if per_motor_current_limit is not None
-                else f"I max {current_max_per_motor_a:.2f} A/motor (no ESC/motor current limit configured)"
+                f"I max {current_max_per_motor_a:.2f} A/motor vs motor rating {motor_current_limit:.2f} A"
+                if motor_current_limit is not None
+                else f"I max {current_max_per_motor_a:.2f} A/motor (no motor current rating configured)"
+            ),
+        )
+    )
+
+    filters.append(
+        FilterResult(
+            name="current_esc",
+            passed=(esc_current_limit is None) or (current_max_per_motor_a <= esc_current_limit),
+            value=current_max_per_motor_a,
+            threshold=esc_current_limit,
+            evaluated=esc_current_limit is not None,
+            detail=(
+                f"I max {current_max_per_motor_a:.2f} A/motor vs ESC rating {esc_current_limit:.2f} A"
+                if esc_current_limit is not None
+                else f"I max {current_max_per_motor_a:.2f} A/motor (no ESC current rating configured)"
             ),
         )
     )
@@ -311,6 +344,7 @@ def evaluate_candidate(
             value=v_pitch_ratio,
             threshold=None,
             evaluated=v_pitch_ratio is not None,
+            hard=False,
             detail=(
                 f"V_pitch/V_t = {v_pitch_ratio:.2f}" if v_pitch_ratio is not None else "not available"
             ),
@@ -324,6 +358,7 @@ def evaluate_candidate(
             value=eta_motor_at_vt,
             threshold=requirement.motor_eta_threshold,
             evaluated=eta_motor_at_vt is not None,
+            hard=False,
             detail=(
                 f"eta_motor@Vt {eta_motor_at_vt:.3f} vs threshold {requirement.motor_eta_threshold:.3f}"
                 if eta_motor_at_vt is not None
@@ -338,6 +373,7 @@ def evaluate_candidate(
             passed=True,
             value=eta_prop_peak,
             threshold=None,
+            hard=False,
             detail=(
                 f"eta_prop peak {eta_prop_peak:.3f}, at V_t "
                 f"{eta_prop_at_vt:.3f}" if eta_prop_at_vt is not None else f"eta_prop peak {eta_prop_peak:.3f}"
@@ -373,6 +409,7 @@ def evaluate_candidate(
     )
 
     all_pass = all(f.passed for f in filters)
+    eligible = all(f.passed for f in filters if f.hard)
 
     momentum_theory_warning: str | None = None
     static_op = ground_roll.operating_points[0] if ground_roll.operating_points else None
@@ -401,6 +438,7 @@ def evaluate_candidate(
         diagnostic_operating_points=diag_points,
         filters=filters,
         all_pass=all_pass,
+        eligible=eligible,
         is_low_confidence=spec.prop.is_low_confidence,
         distance_m=distance_m,
         distance_margin_pct=distance_margin_pct,

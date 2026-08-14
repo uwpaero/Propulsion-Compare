@@ -196,8 +196,12 @@ class SweepResultsTab(QWidget):
         self.results = results
         self.run_btn.setEnabled(True)
         self.export_btn.setEnabled(bool(results))
-        n_pass = sum(1 for r in results if r.all_pass)
-        self.status_label.setText(f"Done: {len(results)} combinations, {n_pass} pass all filters.")
+        n_eligible = sum(1 for r in results if r.eligible)
+        n_optimal = sum(1 for r in results if r.all_pass)
+        self.status_label.setText(
+            f"Done: {len(results)} combinations, {n_eligible} eligible (hard constraints met), "
+            f"{n_optimal} optimal (all filters met)."
+        )
         self._populate_table(results)
         self.sweep_finished.emit(results)
 
@@ -212,11 +216,17 @@ class SweepResultsTab(QWidget):
             thrust_text = f"{result.thrust_at_vt_n:.2f}" if result.thrust_at_vt_n is not None else "-"
             v_pitch_text = f"{result.v_pitch_ratio:.2f}" if result.v_pitch_ratio is not None else "-"
             eta_mot_text = f"{result.eta_motor_at_vt:.3f}" if result.eta_motor_at_vt is not None else "-"
-            n_pass = sum(1 for f in result.filters if f.passed)
-            failing = [f.name for f in result.filters if not f.passed]
-            filters_text = f"{n_pass}/{len(result.filters)} pass" + (
-                f" (fail: {', '.join(failing)})" if failing else ""
-            )
+            hard_filters = [f for f in result.filters if f.hard]
+            soft_filters = [f for f in result.filters if not f.hard]
+            n_hard_pass = sum(1 for f in hard_filters if f.passed)
+            n_soft_pass = sum(1 for f in soft_filters if f.passed)
+            failing_hard = [f.name for f in hard_filters if not f.passed]
+            failing_soft = [f.name for f in soft_filters if not f.passed]
+            filters_text = f"{n_hard_pass}/{len(hard_filters)} hard, {n_soft_pass}/{len(soft_filters)} soft"
+            if failing_hard:
+                filters_text += f" (hard fail: {', '.join(failing_hard)})"
+            if failing_soft:
+                filters_text += f" (soft fail: {', '.join(failing_soft)})"
             if result.is_low_confidence:
                 filters_text += "  [LOW CONFIDENCE]"
 
@@ -235,16 +245,15 @@ class SweepResultsTab(QWidget):
                 (v_pitch_text, result.v_pitch_ratio or 0.0),
                 (eta_mot_text, result.eta_motor_at_vt or 0.0),
                 (f"{result.eta_prop_peak:.3f}", result.eta_prop_peak),
-                (filters_text, n_pass),
+                (filters_text, n_hard_pass),
             ]
 
-            distance_filter = next((f for f in result.filters if f.name == "distance"), None)
-            if distance_filter is not None and not distance_filter.passed:
-                color = RED
+            if not result.eligible:
+                color = RED  # a hard/disqualifying constraint failed
             elif result.all_pass:
-                color = GREEN
+                color = GREEN  # eligible and every soft objective met too
             else:
-                color = AMBER
+                color = AMBER  # eligible, but a soft objective (e.g. efficiency) missed
 
             for col, (text, sort_value) in enumerate(values):
                 item = _NumericItem(sort_value, text) if isinstance(sort_value, (int, float)) else QTableWidgetItem(text)

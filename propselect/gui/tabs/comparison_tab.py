@@ -43,10 +43,11 @@ class ComparisonTab(QWidget):
 
     def set_candidates(self, results: list[CandidateResult]) -> None:
         self.results = results
-        n_pass = sum(1 for r in results if r.all_pass)
+        n_eligible = sum(1 for r in results if r.eligible)
         self.status_label.setText(
-            f"{len(results)} candidates evaluated, {n_pass} pass all filters "
-            "(only passing candidates are plotted below)."
+            f"{len(results)} candidates evaluated, {n_eligible} eligible (hard constraints met) "
+            "-- only eligible candidates are plotted below, so soft-objective tradeoffs "
+            "(e.g. motor efficiency) among legal builds are visible."
         )
         self._update_plots(results)
 
@@ -83,13 +84,13 @@ class ComparisonTab(QWidget):
         self.plot.clear()
         self._axes_candidates.clear()
         axes = self.plot.axes  # 2x3
-        passing = [r for r in results if r.all_pass]
+        passing = [r for r in results if r.eligible]
 
         if not passing:
             for row in axes:
                 for ax in row:
                     ax.text(
-                        0.5, 0.5, "No candidates pass all filters yet.",
+                        0.5, 0.5, "No candidates meet the hard constraints yet.",
                         ha="center", va="center", wrap=True,
                     )
             self.plot.redraw()

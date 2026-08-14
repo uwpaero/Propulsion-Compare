@@ -158,6 +158,43 @@ def test_kinematics_rejects_mismatched_array_lengths():
         integrate_kinematics([0.0, 1.0], [1.0], [0.0, 0.0], [0.0, 0.0], mass_kg=8.0, mu=0.0)
 
 
+def test_kinematics_caps_runaway_near_zero_acceleration_as_dnf():
+    # Net force is barely positive (0.01 N) the whole way -- never <= 0, so
+    # the existing failure branch never trips. Uncapped, this integrates to
+    # a huge-but-finite distance that looks like a real (if bad) number.
+    mass_kg = 8.0
+    v_grid = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    thrust_arr = [5.01] * len(v_grid)
+    drag_arr = [5.0] * len(v_grid)
+    zeros = [0.0] * len(v_grid)
+
+    uncapped = integrate_kinematics(v_grid, thrust_arr, drag_arr, zeros, mass_kg=mass_kg, mu=0.0)
+    assert uncapped.success
+    assert uncapped.distance_m > 1000.0  # confirms the runaway artifact is real
+
+    capped = integrate_kinematics(
+        v_grid, thrust_arr, drag_arr, zeros, mass_kg=mass_kg, mu=0.0, max_distance_m=50.0,
+    )
+    assert not capped.success
+    assert capped.distance_m == math.inf
+    assert capped.reason is not None and "cap" in capped.reason.lower()
+
+
+def test_kinematics_caps_runaway_time_as_dnf():
+    mass_kg = 8.0
+    v_grid = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    thrust_arr = [5.01] * len(v_grid)
+    drag_arr = [5.0] * len(v_grid)
+    zeros = [0.0] * len(v_grid)
+
+    capped = integrate_kinematics(
+        v_grid, thrust_arr, drag_arr, zeros, mass_kg=mass_kg, mu=0.0, max_time_s=1.0,
+    )
+    assert not capped.success
+    assert capped.distance_m == math.inf
+    assert capped.reason is not None and "cap" in capped.reason.lower()
+
+
 # --- Full coupled integration ---
 
 
@@ -224,6 +261,20 @@ def test_ground_roll_reports_structured_failure_for_underpowered_setup():
     assert result.distance_m == math.inf
     assert result.reason is not None
     assert result.stall_v_m_s is not None
+
+
+def test_full_ground_roll_integration_honors_runaway_distance_cap():
+    # Confirms max_distance_m threads all the way through the coupled
+    # integration (not just the pure integrate_kinematics path) -- an
+    # absurdly small cap on an otherwise-successful setup must trip.
+    aircraft, prop, motor, battery = make_full_setup()
+    result = integrate_ground_roll(
+        v_t_m_s=15.0, rho_kg_m3=1.16, aircraft=aircraft, prop=prop, motor=motor,
+        battery=battery, max_distance_m=0.5,
+    )
+    assert not result.success
+    assert result.distance_m == math.inf
+    assert result.reason is not None and "cap" in result.reason.lower()
 
 
 def test_motor_count_scales_thrust_and_pack_current_draw():

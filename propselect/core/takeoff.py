@@ -9,7 +9,10 @@
 Integrated with the trapezoidal rule on a fixed dV grid. If F_net(V) <= 0
 anywhere, the result reports distance = infinity, the airspeed at which it
 went non-positive, and the force deficit at that point -- never a plausible
-looking wrong number.
+looking wrong number. A near-zero (but still positive) F_net is caught the
+same way: an optional runaway-distance/time cap aborts the integration and
+reports DNF instead of a large-but-finite number that looks like a real
+result.
 
 The design is split in two layers:
 
@@ -216,8 +219,18 @@ def integrate_kinematics(
     lift_n: list[float] | np.ndarray,
     mass_kg: float,
     mu: float,
+    max_distance_m: float | None = None,
+    max_time_s: float | None = None,
 ) -> KinematicsResult:
-    """Integrate ds = m*V*dV/F_net and dt = m*dV/F_net with the trapezoidal rule."""
+    """Integrate ds = m*V*dV/F_net and dt = m*dV/F_net with the trapezoidal rule.
+
+    A near-zero (but still positive) F_net never trips the F_net<=0 failure
+    branch, yet 1/F_net blows up ds and dt into a large-but-finite number
+    that looks like a real (if bad) result. If ``max_distance_m`` or
+    ``max_time_s`` is given, the integration aborts and reports DNF (same
+    shape as the F_net<=0 failure) the moment either is exceeded, instead of
+    returning that misleading finite-looking artifact.
+    """
     v = np.asarray(v_grid_m_s, dtype=float)
     thrust = np.asarray(thrust_n, dtype=float)
     drag = np.asarray(drag_n, dtype=float)
@@ -280,6 +293,27 @@ def integrate_kinematics(
         distance_profile.append(distance_m)
         time_profile.append(time_s)
         net_force_list.append(float(fnet[i]))
+
+        if (max_distance_m is not None and distance_m > max_distance_m) or (
+            max_time_s is not None and time_s > max_time_s
+        ):
+            return KinematicsResult(
+                success=False,
+                distance_m=math.inf,
+                time_s=time_s,
+                distance_profile_m=distance_profile,
+                time_profile_s=time_profile,
+                net_force_n=net_force_list,
+                stall_v_m_s=float(v[i]),
+                deficit_n=None,
+                reason=(
+                    f"Ground roll exceeded the runaway-integration cap "
+                    f"(distance {distance_m:.1f} m, time {time_s:.1f} s) at V={v[i]:.2f} m/s "
+                    "without reaching target speed -- net accelerating force stayed too small "
+                    "for too long; treating as DNF rather than reporting a misleading finite "
+                    "distance."
+                ),
+            )
 
     return KinematicsResult(
         success=True,
@@ -353,6 +387,8 @@ def integrate_ground_roll(
     dv_m_s: float = DEFAULT_DV_M_S,
     initial_soc: float = 1.0,
     motor_count: int = 1,
+    max_distance_m: float | None = None,
+    max_time_s: float | None = None,
 ) -> GroundRollResult:
     """Integrate the takeoff ground roll from 0 to ``v_t_m_s``.
 
@@ -414,7 +450,10 @@ def integrate_ground_roll(
 
         thrust_arr = [op.thrust_n for op in ops]  # type: ignore[union-attr]
         pack_current_arr = [op.current_pack_a for op in ops]  # type: ignore[union-attr]
-        kin = integrate_kinematics(v_grid, thrust_arr, drag_arr, lift_arr, aircraft.mass_kg, aircraft.mu)
+        kin = integrate_kinematics(
+            v_grid, thrust_arr, drag_arr, lift_arr, aircraft.mass_kg, aircraft.mu,
+            max_distance_m=max_distance_m, max_time_s=max_time_s,
+        )
 
         if not kin.success:
             break

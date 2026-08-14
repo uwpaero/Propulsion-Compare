@@ -75,7 +75,7 @@ class DetailTab(QWidget):
     def _candidate_label(self, result: CandidateResult) -> str:
         motor_count_desc = f" (x{result.spec.motor_count} motors)" if result.spec.motor_count > 1 else ""
         distance_desc = f"{result.distance_m:.1f} m" if math.isfinite(result.distance_m) else "DNF"
-        status = "OK" if result.all_pass else "fails filter(s)"
+        status = "OK" if result.all_pass else ("eligible" if result.eligible else "NOT ELIGIBLE")
         return (
             f"{result.spec.motor.name} + {result.spec.prop.name}"
             f"{motor_count_desc} -- {distance_desc}, {status}"
@@ -241,10 +241,12 @@ class DetailTab(QWidget):
         if not result.ground_roll.success and result.ground_roll.reason:
             lines.append(f"Failure reason: {result.ground_roll.reason}")
         lines.append("")
+        lines.append(f"Eligible (hard constraints met): {'YES' if result.eligible else 'NO'}")
         lines.append("Filters:")
         for f in result.filters:
             status = "PASS" if f.passed else "FAIL"
-            lines.append(f"  [{status}] {f.name}: {f.detail}")
+            kind = "hard" if f.hard else "soft"
+            lines.append(f"  [{status}] ({kind}) {f.name}: {f.detail}")
         if result.momentum_theory_warning:
             lines.append("")
             lines.append(f"WARNING: {result.momentum_theory_warning}")
