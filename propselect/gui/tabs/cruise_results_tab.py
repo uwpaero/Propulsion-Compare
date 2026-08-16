@@ -82,6 +82,7 @@ class CruiseSweepWorker(QThread):
 
 class CruiseResultsTab(QWidget):
     candidate_selected = Signal(object)  # CruiseCandidateResult
+    sweep_finished = Signal(list)  # list[CruiseCandidateResult]
 
     def __init__(self, state, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -199,6 +200,7 @@ class CruiseResultsTab(QWidget):
             f"{n_optimal} optimal (all filters met)."
         )
         self._populate_table(results)
+        self.sweep_finished.emit(results)
 
     def _populate_table(self, results: list[CruiseCandidateResult]) -> None:
         self.table.setSortingEnabled(False)
@@ -282,6 +284,23 @@ class CruiseResultsTab(QWidget):
             ):
                 return result
         return None
+
+    def select_candidate(self, result: CruiseCandidateResult) -> None:
+        """Select the row matching ``result`` (e.g. from a Tab 10 plot click)."""
+        for row in range(self.table.rowCount()):
+            motor_item = self.table.item(row, 0)
+            prop_item = self.table.item(row, 1)
+            motors_item = self.table.item(row, 2)
+            if not (motor_item and prop_item and motors_item):
+                continue
+            if (
+                motor_item.text() == result.spec.motor.name
+                and prop_item.text() == result.spec.prop.name
+                and motors_item.text() == str(result.spec.motor_count)
+            ):
+                self.table.selectRow(row)
+                self.table.scrollToItem(motor_item)
+                return
 
     def _export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export results CSV", "", "CSV (*.csv)")

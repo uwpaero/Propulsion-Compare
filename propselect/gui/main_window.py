@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
         from propselect.gui.tabs.aircraft_tab import AircraftTab
         from propselect.gui.tabs.battery_tab import BatteryTab
         from propselect.gui.tabs.comparison_tab import ComparisonTab
+        from propselect.gui.tabs.cruise_comparison_tab import CruiseComparisonTab
+        from propselect.gui.tabs.cruise_detail_tab import CruiseDetailTab
         from propselect.gui.tabs.cruise_results_tab import CruiseResultsTab
         from propselect.gui.tabs.detail_tab import DetailTab
         from propselect.gui.tabs.motor_library_tab import MotorLibraryTab
@@ -77,6 +79,8 @@ class MainWindow(QMainWindow):
         self.detail_tab = DetailTab(self.state)
         self.comparison_tab = ComparisonTab(self.state)
         self.cruise_tab = CruiseResultsTab(self.state)
+        self.cruise_detail_tab = CruiseDetailTab(self.state)
+        self.cruise_comparison_tab = CruiseComparisonTab(self.state)
 
         self.tabs.addTab(self.aircraft_tab, "1. Aircraft && Requirement")
         self.tabs.addTab(self.battery_tab, "2. Battery && ESC")
@@ -86,6 +90,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.detail_tab, "6. Detail")
         self.tabs.addTab(self.comparison_tab, "7. Comparison")
         self.tabs.addTab(self.cruise_tab, "8. Cruise")
+        self.tabs.addTab(self.cruise_detail_tab, "9. Cruise Detail")
+        self.tabs.addTab(self.cruise_comparison_tab, "10. Cruise Comparison")
 
         # Cross-tab wiring: a row selected in Tab 5 populates Tab 6.
         self.sweep_tab.candidate_selected.connect(self.detail_tab.show_candidate)
@@ -93,9 +99,19 @@ class MainWindow(QMainWindow):
         self.sweep_tab.sweep_finished.connect(self.comparison_tab.set_candidates)
         self.comparison_tab.candidate_clicked.connect(self._on_comparison_candidate_clicked)
 
+        # Same wiring for the cruise tabs (8 -> 9, 10).
+        self.cruise_tab.candidate_selected.connect(self.cruise_detail_tab.show_candidate)
+        self.cruise_tab.sweep_finished.connect(self.cruise_detail_tab.set_candidates)
+        self.cruise_tab.sweep_finished.connect(self.cruise_comparison_tab.set_candidates)
+        self.cruise_comparison_tab.candidate_clicked.connect(self._on_cruise_comparison_candidate_clicked)
+
     def _on_comparison_candidate_clicked(self, result) -> None:
         self.sweep_tab.select_candidate(result)
         self.tabs.setCurrentWidget(self.sweep_tab)
+
+    def _on_cruise_comparison_candidate_clicked(self, result) -> None:
+        self.cruise_tab.select_candidate(result)
+        self.tabs.setCurrentWidget(self.cruise_tab)
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("&File")

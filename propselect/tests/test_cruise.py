@@ -9,6 +9,7 @@ from propselect.core.cruise import (
     CruisePoint,
     CruisePointFailure,
     CruiseRequirement,
+    cruise_envelope,
     evaluate_cruise_candidate,
     evaluate_cruise_candidates,
     solve_cruise_point,
@@ -159,6 +160,19 @@ def test_evaluate_cruise_candidate_infeasible_solve_still_reports_every_filter()
     assert result.eligible is False
     solve_filter = next(f for f in result.filters if f.name == "cruise_solve")
     assert solve_filter.passed is False
+
+
+def test_cruise_envelope_sweeps_v_and_leaves_base_requirement_unchanged():
+    spec = CandidateSpec(motor=make_motor(), prop=make_prop())
+    requirement = make_requirement(v_cruise_m_s=15.0)
+    v_values = [8.0, 12.0, 16.0, 20.0]
+    envelope = cruise_envelope(spec, requirement, make_battery(), v_values)
+    assert len(envelope) == len(v_values)
+    assert requirement.v_cruise_m_s == 15.0  # frozen dataclass, sweep must not mutate it
+    ok_points = [r for r in envelope if isinstance(r.cruise_point, CruisePoint)]
+    assert any(ok_points)
+    for r, v in zip(envelope, v_values):
+        assert r.cruise_point.v_m_s == pytest.approx(v)
 
 
 def test_evaluate_cruise_candidates_runs_full_cross_product():

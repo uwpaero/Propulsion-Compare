@@ -31,7 +31,7 @@ I_pack = duty*I_motor if endurance estimates need to be tighter than this.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Union
 
 from scipy.optimize import brentq
@@ -464,3 +464,25 @@ def evaluate_cruise_candidates(
 ) -> list[CruiseCandidateResult]:
     """Evaluate a list of candidates (the cross product of motors x props x motor counts)."""
     return [evaluate_cruise_candidate(spec, requirement, battery) for spec in specs]
+
+
+def cruise_envelope(
+    spec: CandidateSpec,
+    requirement: CruiseRequirement,
+    battery: Battery,
+    v_values_m_s: list[float],
+) -> list[CruiseCandidateResult]:
+    """Re-solve the cruise equilibrium at each airspeed in ``v_values_m_s``.
+
+    Each airspeed has its own required thrust (drag grows with V, roughly
+    offset by the falling induced-drag term) and its own WOT feasibility
+    ceiling -- there is no shared sweep grid the way there is for a single
+    takeoff ground roll. Used to plot how throttle, current, and efficiency
+    vary across a candidate's cruise speed envelope, plotting a curve
+    instead of the single point ``evaluate_cruise_candidate`` gives at one
+    airspeed.
+    """
+    return [
+        evaluate_cruise_candidate(spec, replace(requirement, v_cruise_m_s=v), battery)
+        for v in v_values_m_s
+    ]
