@@ -15,6 +15,7 @@ from pathlib import Path
 from propselect.core.atmosphere import celsius_to_kelvin, isa_offset_atmosphere
 from propselect.core.battery import Battery, InternalResistanceBattery, MeasuredCurveBattery, OCVTable
 from propselect.core.candidate import RequirementSpec
+from propselect.core.cruise import CruiseRequirement
 from propselect.core.takeoff import AircraftConfig
 
 DEFAULT_OCV_SOC = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
@@ -74,6 +75,9 @@ class AircraftConfigModel:
     distance_allowed_m: float = 30.5
     field_elevation_m: float = 0.0
     field_temperature_c: float | None = None
+    v_cruise_m_s: float = 20.0
+    cd0_cruise: float = 0.035
+    endurance_required_s: float | None = None
 
     @property
     def aspect_ratio(self) -> float:
@@ -137,6 +141,22 @@ class Project:
             power_limit_w=self.power_limit_w,
             c_rate_limit=self.battery.c_rate_limit,
             dv_m_s=self.dv_m_s,
+            initial_soc=self.battery.initial_soc,
+        )
+
+    def to_cruise_requirement(self) -> CruiseRequirement:
+        atm = self.aircraft.atmosphere()
+        return CruiseRequirement(
+            aircraft=self.aircraft.to_aircraft_config(),
+            v_cruise_m_s=self.aircraft.v_cruise_m_s,
+            cd0_cruise=self.aircraft.cd0_cruise,
+            rho_kg_m3=atm.density,
+            speed_of_sound_m_s=atm.speed_of_sound,
+            tip_mach_limit=self.tip_mach_limit,
+            motor_eta_threshold=self.motor_eta_threshold,
+            power_limit_w=self.power_limit_w,
+            c_rate_limit=self.battery.c_rate_limit,
+            endurance_required_s=self.aircraft.endurance_required_s,
             initial_soc=self.battery.initial_soc,
         )
 

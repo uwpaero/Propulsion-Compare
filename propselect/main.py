@@ -9,6 +9,7 @@ import sys
 
 from propselect.core.atmosphere import speed_of_sound
 from propselect.core.candidate import CandidateSpec, evaluate_candidate
+from propselect.core.cruise import CruisePoint, evaluate_cruise_candidate
 from propselect.core.motor import MotorSpec
 from propselect.core.operating_point import OperatingPoint
 from propselect.core.propeller import PropellerModel
@@ -56,6 +57,9 @@ def _build_project(args: argparse.Namespace) -> Project:
         distance_allowed_m=args.distance,
         field_elevation_m=args.elevation,
         field_temperature_c=args.temp_c,
+        v_cruise_m_s=args.v_cruise,
+        cd0_cruise=args.cd_cruise,
+        endurance_required_s=args.endurance_required,
     )
     battery = BatteryConfigModel(
         series=args.series,
@@ -177,6 +181,62 @@ def _print_summary(
     print(f"\nOVERALL: {overall}")
 
 
+def _print_cruise_summary(
+    motor: MotorSpec, prop: PropellerModel, project: Project, motor_count: int
+) -> None:
+    requirement = project.to_cruise_requirement()
+    battery = project.battery.to_battery()
+
+    print("=== propselect CLI: cruise ===")
+    print(f"Cruise airspeed: {requirement.v_cruise_m_s:.2f} m/s   C_D0_cruise={requirement.cd0_cruise:.4f}")
+
+    spec = CandidateSpec(
+        motor=motor,
+        prop=prop,
+        r_esc_ohm=project.battery.esc_r_ohm,
+        esc_current_cont_a=project.battery.esc_current_cont_a,
+        motor_count=motor_count,
+    )
+    result = evaluate_cruise_candidate(spec, requirement, battery)
+
+    print(
+        f"C_L={result.cl_cruise:.3f}  C_D={result.cd_cruise:.4f}  "
+        f"T_required={result.thrust_required_n:.2f} N"
+    )
+
+    if isinstance(result.cruise_point, CruisePoint):
+        p = result.cruise_point
+        current_desc = (
+            f"I={p.current_a:.2f} A/motor  I_pack={p.current_pack_a:.2f} A" if motor_count > 1 else f"I={p.current_a:.2f} A"
+        )
+        print("\n--- Cruise operating point ---")
+        print(
+            f"n={p.n_rev_s * 60:.0f} rpm  J={p.j:.3f}  T={p.thrust_n:.2f} N  {current_desc}  "
+            f"V_required={p.voltage_v:.2f} V  throttle={p.throttle_fraction * 100:.0f}%"
+        )
+        print(f"eta_motor={p.eta_motor:.3f}  eta_prop={p.eta_prop:.3f}")
+        if result.endurance_s is not None:
+            print(
+                f"Endurance: {result.endurance_s / 60.0:.1f} min   Range: {result.range_m / 1000.0:.2f} km"
+            )
+    else:
+        print(f"\nSTATUS: FAIL -- {result.cruise_point.reason}")
+
+    print("\n--- Filters ---")
+    for f in result.filters:
+        status = "PASS" if f.passed else "FAIL"
+        marker = "  " if f.evaluated else "(-)"
+        print(f"[{status}]{marker} {f.name:18s} {f.detail}")
+
+    if not result.eligible:
+        overall = "NOT ELIGIBLE (a hard/disqualifying constraint failed)"
+    elif result.all_pass:
+        overall = "ELIGIBLE, ALL FILTERS PASS"
+    else:
+        overall = "ELIGIBLE, but a soft objective was missed (see FAIL lines above)"
+    print(f"\nOVERALL: {overall}")
+
+
 def _add_cli_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--motor", required=True, help="Motor name in the motor library JSON")
     parser.add_argument(
@@ -189,6 +249,10 @@ def _add_cli_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--motor-count", type=int, default=1,
         help="Number of identical motors sharing one pack (default 1)",
+    )
+    parser.add_argument(
+        "--mode", choices=["takeoff", "cruise", "both"], default="both",
+        help="Which evaluation(s) to print (default both)",
     )
 
     parser.add_argument("--mass", type=float, default=8.0, help="Aircraft mass [kg]")
@@ -203,6 +267,12 @@ def _add_cli_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--distance", type=float, default=30.5, help="Allowed takeoff distance [m]")
     parser.add_argument("--elevation", type=float, default=0.0, help="Field elevation [m]")
     parser.add_argument("--temp-c", type=float, default=None, help="Field OAT [degC]")
+
+    parser.add_argument("--v-cruise", type=float, default=20.0, help="Cruise airspeed [m/s]")
+    parser.add_argument("--cd-cruise", type=float, default=0.035, help="Clean-configuration cruise C_D0")
+    parser.add_argument(
+        "--endurance-required", type=float, default=None, help="Minimum required cruise endurance [s]"
+    )
 
     parser.add_argument("--series", type=int, default=4)
     parser.add_argument("--parallel", type=int, default=1)
@@ -227,7 +297,12 @@ def run_cli(argv: list[str]) -> int:
     prop = _load_propeller(args)
     project = _build_project(args)
 
-    _print_summary(motor, prop, project, motor_count=args.motor_count)
+    if args.mode in ("takeoff", "both"):
+        _print_summary(motor, prop, project, motor_count=args.motor_count)
+    if args.mode == "both":
+        print()
+    if args.mode in ("cruise", "both"):
+        _print_cruise_summary(motor, prop, project, motor_count=args.motor_count)
     return 0
 
 

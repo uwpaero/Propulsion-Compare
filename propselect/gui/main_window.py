@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         from propselect.gui.tabs.aircraft_tab import AircraftTab
         from propselect.gui.tabs.battery_tab import BatteryTab
         from propselect.gui.tabs.comparison_tab import ComparisonTab
+        from propselect.gui.tabs.cruise_results_tab import CruiseResultsTab
         from propselect.gui.tabs.detail_tab import DetailTab
         from propselect.gui.tabs.motor_library_tab import MotorLibraryTab
         from propselect.gui.tabs.propeller_library_tab import PropellerLibraryTab
@@ -75,6 +76,7 @@ class MainWindow(QMainWindow):
         self.sweep_tab = SweepResultsTab(self.state)
         self.detail_tab = DetailTab(self.state)
         self.comparison_tab = ComparisonTab(self.state)
+        self.cruise_tab = CruiseResultsTab(self.state)
 
         self.tabs.addTab(self.aircraft_tab, "1. Aircraft && Requirement")
         self.tabs.addTab(self.battery_tab, "2. Battery && ESC")
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.sweep_tab, "5. Sweep && Results")
         self.tabs.addTab(self.detail_tab, "6. Detail")
         self.tabs.addTab(self.comparison_tab, "7. Comparison")
+        self.tabs.addTab(self.cruise_tab, "8. Cruise")
 
         # Cross-tab wiring: a row selected in Tab 5 populates Tab 6.
         self.sweep_tab.candidate_selected.connect(self.detail_tab.show_candidate)

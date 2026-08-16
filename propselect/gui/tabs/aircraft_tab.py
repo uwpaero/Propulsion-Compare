@@ -54,6 +54,7 @@ class AircraftTab(QWidget):
         self.wheel_height = UnitAwareSpinBox(LENGTH_SMALL, 0.0, 10.0, si_decimals=4, si_step=0.01)
         self.elevation = UnitAwareSpinBox(LENGTH_LARGE, -500.0, 6000.0, si_decimals=1, si_step=10.0)
         self.temp_c = UnitAwareSpinBox(TEMPERATURE, -60.0, 60.0, si_decimals=1, si_step=1.0)
+        self.v_cruise = UnitAwareSpinBox(VELOCITY, 0.1, 200.0, si_decimals=2, si_step=0.5)
         self._unit_aware_widgets = [
             self.mass,
             self.wing_area,
@@ -63,7 +64,15 @@ class AircraftTab(QWidget):
             self.wheel_height,
             self.elevation,
             self.temp_c,
+            self.v_cruise,
         ]
+
+        # Cruise-only fields (dimensionless / time -- no SI/US distinction
+        # beyond what UnitAwareSpinBox already handles for v_cruise above).
+        self.cd0_cruise = _spin(0.0, 5.0, 4, 0.001, "(C_D0)")
+        self.endurance_required_enabled = QCheckBox("require minimum endurance")
+        self.endurance_required_min = _spin(0.0, 10000.0, 1, 1.0, "min")
+        self.endurance_required_min.setEnabled(False)
 
         # Dimensionless or angle fields: no SI/US distinction.
         # Aspect ratio is AR = b^2/S -- the exact definition, not an
@@ -131,9 +140,20 @@ class AircraftTab(QWidget):
         filters_form.addRow("Power limit", power_row)
         filters_box.setLayout(filters_form)
 
+        cruise_box = QGroupBox("Cruise (steady, level flight)")
+        cruise_form = QFormLayout()
+        cruise_form.addRow("Cruise velocity", self.v_cruise)
+        cruise_form.addRow("Cruise C_D0 (clean config.)", self.cd0_cruise)
+        endurance_row = QHBoxLayout()
+        endurance_row.addWidget(self.endurance_required_enabled)
+        endurance_row.addWidget(self.endurance_required_min)
+        cruise_form.addRow("Min. endurance", endurance_row)
+        cruise_box.setLayout(cruise_form)
+
         left_layout = QVBoxLayout()
         left_layout.addLayout(form)
         left_layout.addWidget(filters_box)
+        left_layout.addWidget(cruise_box)
         left = QWidget()
         left.setLayout(left_layout)
 
@@ -176,12 +196,15 @@ class AircraftTab(QWidget):
             self.tip_mach_limit,
             self.motor_eta_threshold,
             self.power_limit_w,
+            self.cd0_cruise,
+            self.endurance_required_min,
         ]:
             widget.valueChanged.connect(self._on_change)
         self.surface_combo.currentTextChanged.connect(self._on_surface_preset)
         self.ground_effect.toggled.connect(self._on_change)
         self.temp_override_enabled.toggled.connect(self._on_temp_toggle)
         self.power_limit_enabled.toggled.connect(self._on_power_limit_toggle)
+        self.endurance_required_enabled.toggled.connect(self._on_endurance_required_toggle)
 
     def set_unit_system(self, system: UnitSystem) -> None:
         """Switch every unit-aware field's display unit, converting values in place."""
@@ -204,6 +227,10 @@ class AircraftTab(QWidget):
 
     def _on_power_limit_toggle(self, checked: bool) -> None:
         self.power_limit_w.setEnabled(checked)
+        self._on_change()
+
+    def _on_endurance_required_toggle(self, checked: bool) -> None:
+        self.endurance_required_min.setEnabled(checked)
         self._on_change()
 
     def _on_change(self) -> None:
@@ -255,6 +282,11 @@ class AircraftTab(QWidget):
         model.field_temperature_c = (
             self.temp_c.si_value() if self.temp_override_enabled.isChecked() else None
         )
+        model.v_cruise_m_s = self.v_cruise.si_value()
+        model.cd0_cruise = self.cd0_cruise.value()
+        model.endurance_required_s = (
+            self.endurance_required_min.value() * 60.0 if self.endurance_required_enabled.isChecked() else None
+        )
 
         project = self.state.project
         project.tip_mach_limit = self.tip_mach_limit.value()
@@ -274,6 +306,8 @@ class AircraftTab(QWidget):
             self.tip_mach_limit,
             self.motor_eta_threshold,
             self.power_limit_w,
+            self.cd0_cruise,
+            self.endurance_required_min,
         ]
         for w in widgets:
             w.blockSignals(True)
@@ -292,6 +326,11 @@ class AircraftTab(QWidget):
         self.temp_override_enabled.setChecked(model.field_temperature_c is not None)
         self.temp_c.set_si_value(model.field_temperature_c or 15.0)
         self.temp_c.setEnabled(model.field_temperature_c is not None)
+        self.v_cruise.set_si_value(model.v_cruise_m_s)
+        self.cd0_cruise.setValue(model.cd0_cruise)
+        self.endurance_required_enabled.setChecked(model.endurance_required_s is not None)
+        self.endurance_required_min.setValue((model.endurance_required_s or 0.0) / 60.0)
+        self.endurance_required_min.setEnabled(model.endurance_required_s is not None)
 
         project = self.state.project
         self.tip_mach_limit.setValue(project.tip_mach_limit)
