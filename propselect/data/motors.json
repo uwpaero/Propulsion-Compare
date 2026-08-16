@@ -50,7 +50,7 @@
   {
     "name": "T-Motor AT2814",
     "Kv": 900.0,
-    "R_motor": 0.070,
+    "R_motor": 0.07,
     "I0": 0.8,
     "I_max_cont": 30.0,
     "I_max_burst": 40.0,
@@ -62,7 +62,7 @@
   {
     "name": "Generic 2200Kv 2830 (placeholder)",
     "Kv": 2200.0,
-    "R_motor": 0.090,
+    "R_motor": 0.09,
     "I0": 0.6,
     "I_max_cont": 20.0,
     "I_max_burst": 28.0,
@@ -162,7 +162,7 @@
     "I0": 1.7,
     "I_max_cont": 45.0,
     "I_max_burst": null,
-    "mass": 0.080,
+    "mass": 0.08,
     "shaft_dia": 4.0,
     "source_url": "https://store.tmotor.com/product/at2317-long-shaft-fixed-wing-motor.html",
     "notes": "Factory datasheet (store.tmotor.com). Max current/power rated for 180s duration. Recommended cells 2-4S. 9in-class quad-layout candidate. No published burst rating."
@@ -242,7 +242,7 @@
   {
     "name": "Scorpion SII-3020-890Kv",
     "Kv": 890.0,
-    "R_motor": 0.020,
+    "R_motor": 0.02,
     "I0": 1.42,
     "I_max_cont": 45.0,
     "I_max_burst": null,
@@ -278,7 +278,7 @@
   {
     "name": "Cobra C-2217/16 1180Kv",
     "Kv": 1180.0,
-    "R_motor": 0.070,
+    "R_motor": 0.07,
     "I0": 0.75,
     "I_max_cont": 24.0,
     "I_max_burst": null,
@@ -334,5 +334,17 @@
     "shaft_dia": 5.0,
     "source_url": "https://store.tmotor.com/product/at3520-long-shaft-fixed-wing-motor.html",
     "notes": "Factory datasheet (store.tmotor.com), 4-6S LiPo. T-Motor's own recommended prop is APC 13x6.5 or 14x7 -- larger than the 12in target, so this is a stretch fit included for a higher-payload 2-motor option; verify it actually pairs well with a 12in prop in the sweep before trusting it. Max current/power rated for 180s duration. No published burst rating."
+  },
+  {
+    "name": "SunnySky V2216-11 900Kv",
+    "Kv": 900.0,
+    "R_motor": 0.135,
+    "I0": 0.4,
+    "I_max_cont": 20.0,
+    "I_max_burst": null,
+    "mass": 0.075,
+    "shaft_dia": 3.0,
+    "source_url": "https://sunnyskyusa.com/products/sunnysky-v2216-motors",
+    "notes": "Factory datasheet (sunnyskyusa.com), 22x16mm stator, 2-4S input, max power 210W, I0 measured at 10V. No published burst-current rating. A common budget 2216-class outrunner (also sold/rebadged as similar 2216 900kv motors by several vendors); manufacturer lists 9-11in props as the typical range for this size/Kv class."
   }
 ]
