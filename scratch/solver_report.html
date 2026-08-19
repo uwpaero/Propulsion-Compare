@@ -130,12 +130,12 @@
 
 <h1>propselect</h1>
 <p class="subtitle">Electric Propulsion Selection Tool — Solver Reference</p>
-<p class="meta">Physics, assumptions, equations, and control flow of the coupled motor/propeller/battery ground-roll solver.</p>
+<p class="meta">Physics, assumptions, equations, and control flow of the coupled motor/propeller/battery solver, for both the takeoff ground-roll and cruise steady-level-flight modes.</p>
 
 <div class="toc">
 <div><a href="#overview">1. Overview &amp; Scope</a></div>
 <div><a href="#architecture">2. System Architecture</a></div>
-<div><a href="#flowchart">3. Solver Flow Chart</a></div>
+<div><a href="#flowchart">3. Takeoff Solver Flow Chart</a></div>
 <div><a href="#nomenclature">4. Nomenclature</a></div>
 <div><a href="#atmosphere">5. Atmosphere Model</a></div>
 <div><a href="#battery">6. Battery Model</a></div>
@@ -143,21 +143,23 @@
 <div><a href="#propeller">8. Propeller Model</a></div>
 <div><a href="#opsolve">9. Coupled Operating-Point Solver</a></div>
 <div><a href="#multimotor">10. Multi-Motor Extension</a></div>
-<div><a href="#takeoff">11. Ground-Roll Integration</a></div>
-<div><a href="#closedform">12. Closed-Form Quick Estimate</a></div>
-<div><a href="#filters">13. Candidate Filters</a></div>
-<div><a href="#momentum">14. Momentum-Theory Cross-Check</a></div>
-<div><a href="#assumptions">15. Assumptions &amp; Limitations</a></div>
-<div><a href="#validation">16. Validation</a></div>
-<div><a href="#reference">17. Module Reference</a></div>
+<div><a href="#takeoff">11. Ground-Roll Integration (Takeoff)</a></div>
+<div><a href="#cruise">12. Cruise (Steady Level Flight)</a></div>
+<div><a href="#closedform">13. Closed-Form Quick Estimate</a></div>
+<div><a href="#filters">14. Candidate Filters</a></div>
+<div><a href="#momentum">15. Momentum-Theory Cross-Check</a></div>
+<div><a href="#assumptions">16. Assumptions &amp; Limitations</a></div>
+<div><a href="#validation">17. Validation</a></div>
+<div><a href="#reference">18. Module Reference</a></div>
 </div>
 
 <h2 id="overview">1. Overview &amp; Scope</h2>
 <p>propselect selects and ranks electric motor + propeller combinations for a fixed-wing aircraft
-against a takeoff-distance requirement. For each candidate (a motor, a propeller, and
-a motor count, direct drive only), it solves the coupled motor/propeller electrical-mechanical operating point across an
-airspeed sweep, integrates the ground roll from a standstill to the target/rotation speed, and scores
-the result against a set of filters (tip Mach, current, power, efficiency, distance).</p>
+against a takeoff-distance requirement and/or a cruise (steady, level-flight) requirement. For each
+candidate (a motor, a propeller, and a motor count, direct drive only), it solves the coupled
+motor/propeller electrical-mechanical operating point &mdash; across an airspeed sweep for takeoff, or
+at a single thrust-equals-drag equilibrium for cruise &mdash; and scores the result against a set of
+filters (tip Mach, current, power, efficiency, distance or endurance).</p>
 <p>The physics core (<code>propselect/core/</code>) has zero GUI dependencies and is fully scriptable
 headlessly; the GUI and CLI are thin front ends over the same functions documented here.</p>
 
@@ -168,16 +170,19 @@ headlessly; the GUI and CLI are thin front ends over the same functions document
 <tr><td><code>core/battery.py</code></td><td>Two selectable pack voltage-sag models (internal resistance, measured curve).</td></tr>
 <tr><td><code>core/motor.py</code></td><td>BLDC motor electrical/torque relations (direct drive).</td></tr>
 <tr><td><code>core/propeller.py</code></td><td>C<sub>T</sub>(J), C<sub>P</sub>(J) interpolation, thrust/power/torque, momentum-theory check.</td></tr>
-<tr><td><code>core/operating_point.py</code></td><td>The coupled 1-D root-find solver at a single airspeed.</td></tr>
+<tr><td><code>core/operating_point.py</code></td><td>The coupled 1-D root-find solver at a single airspeed (full throttle).</td></tr>
 <tr><td><code>core/takeoff.py</code></td><td>Ground-roll trapezoidal integration, SoC feedback, closed-form estimate.</td></tr>
-<tr><td><code>core/candidate.py</code></td><td>Per-candidate evaluation: runs the ground roll, sweeps diagnostics, scores all filters.</td></tr>
+<tr><td><code>core/cruise.py</code></td><td>Steady level-flight (T=D) equilibrium solve, throttle/endurance, cruise filters.</td></tr>
+<tr><td><code>core/candidate.py</code></td><td>Per-candidate takeoff evaluation: runs the ground roll, sweeps diagnostics, scores all filters.</td></tr>
 <tr><td><code>data/loaders.py</code></td><td>APC <code>.dat</code>, UIUC, and CSV propeller data import with unit-consistency validation.</td></tr>
-<tr><td><code>project.py</code></td><td>JSON-serializable input model shared by the GUI and CLI; converts to the core dataclasses above.</td></tr>
-<tr><td><code>main.py</code></td><td>CLI entry point (<code>propselect cli</code>) and GUI launcher (<code>propselect gui</code>).</td></tr>
-<tr><td><code>gui/</code></td><td>PySide6 desktop app: 7 tabs mapping directly onto the inputs and outputs described in this document.</td></tr>
+<tr><td><code>project.py</code></td><td>JSON-serializable input model shared by the GUI and CLI; converts to the core dataclasses above (both takeoff and cruise requirements).</td></tr>
+<tr><td><code>main.py</code></td><td>CLI entry point (<code>propselect cli --mode takeoff|cruise|both</code>) and GUI launcher (<code>propselect gui</code>).</td></tr>
+<tr><td><code>gui/</code></td><td>PySide6 desktop app: 10 tabs, 3 of which (Cruise, Cruise Detail, Cruise Comparison) mirror the takeoff Sweep/Detail/Comparison tabs for the cruise workflow.</td></tr>
 </table>
 
-<h2 id="flowchart" class="pagebreak">3. Solver Flow Chart</h2>
+<h2 id="flowchart" class="pagebreak">3. Takeoff Solver Flow Chart</h2>
+<p class="small">See &sect;12 for the cruise solve, which replaces the ground-roll integration below
+with a single equilibrium root-find and has no diagnostic sweep or SoC-feedback loop.</p>
 
 <div class="flow">
   <div class="fbox io" style="width:60%;">User Inputs<br/><span class="small">Tab 1-4 / Project: aircraft, requirement, battery, motor(s), propeller (direct drive)</span></div>
@@ -233,7 +238,7 @@ headlessly; the GUI and CLI are thin front ends over the same functions document
       </div>
     </div>
     <div class="arrow-down">&#8595;</div>
-    <div class="fbox sub" style="width:80%;">Score 8 filters (all reported, none hard-dropped)<br/><span class="small">tip Mach &middot; current/motor &middot; current/pack &middot; power &middot; pitch speed &middot; motor &eta; &middot; prop &eta; &middot; distance</span></div>
+    <div class="fbox sub" style="width:80%;">Score 9 filters (all reported, none hard-dropped)<br/><span class="small">tip Mach &middot; current/motor &middot; current/ESC &middot; current/pack &middot; power &middot; pitch speed &middot; motor &eta; &middot; prop &eta; &middot; distance</span></div>
     <div class="arrow-down">&#8595;</div>
     <div class="fbox sub" style="width:70%;">Momentum-theory static-thrust sanity check<br/><span class="small">per-motor T vs. FM &isin; [0.4, 0.75] band &mdash; warns, does not gate</span></div>
   </div>
@@ -403,7 +408,55 @@ get an approximate current/time profile; the second re-solves every operating po
 sag implied by that profile. SoC sag over one takeoff run is small enough that this converges to a
 good approximation without an inner iterative solve per grid point.</p>
 
-<h2 id="closedform">12. Closed-Form Quick Estimate</h2>
+<h2 id="cruise" class="pagebreak">12. Cruise (Steady Level Flight)</h2>
+<p>Source: <code>core/cruise.py</code>. Cruise is a single equilibrium condition, not an
+integration: thrust must equal drag at one airspeed, with the aircraft in steady, unaccelerated,
+level flight (L=W). There is no time-of-flight to integrate and no diagnostic sweep grid &mdash;
+one candidate at one cruise velocity produces exactly one operating point.</p>
+<div class="eq">C_L    = 2&middot;m&middot;g / (&rho;&middot;V&sup2;&middot;S)
+C_D    = C_D0,cruise + C_L&sup2;/(&pi;&middot;AR&middot;e)
+T_req  = D = 0.5&middot;&rho;&middot;V&sup2;&middot;S&middot;C_D</div>
+<p>C<sub>D0,cruise</sub> is a separate input from the ground-roll C<sub>D0</sub> (&sect;11) &mdash; the
+ground-roll value describes a gear-down, ground-proximity configuration and does not represent a
+clean-configuration cruise condition. Mass, wing area, span, and Oswald efficiency are reused
+directly from the same <code>AircraftConfig</code> as takeoff (&sect;11); the ground-only fields
+(&mu;, C<sub>L,ground</sub>, wheel height, ground effect) are simply unused here.</p>
+<h3>Thrust-matched propeller speed</h3>
+<p>The coupled operating-point solver (&sect;9) has no throttle knob &mdash; it solves the single
+full-throttle (WOT) condition. Cruise reuses it for two purposes: as the search bound and as the
+feasibility ceiling.</p>
+<div class="eq">1.  WOT = solve_operating_point(V, ...)            [&sect;9, full throttle]
+2.  if WOT.thrust &lt; T_req: infeasible               [cannot sustain this V]
+3.  find n &isin; [n_min, WOT.n] such that:
+        motor_count &middot; C_T(J(n))&middot;&rho;&middot;n&sup2;&middot;D&#8308; = T_req    [brentq root-find, T(n) at fixed V]</div>
+<p>This works because thrust depends only on n and V, not on throttle setting, while the motor's
+torque/current relation Q=K<sub>t</sub>&middot;(I&minus;I&#8320;) (&sect;7) holds at <i>any</i> throttle &mdash;
+so once n is thrust-matched, current follows directly with no throttle model needed at all:</p>
+<div class="eq">Q_prop     = C_P(J)&middot;&rho;&middot;n&sup2;&middot;D&#8309;/(2&pi;)
+I          = I&#8320; + Q_prop/K_t                          [per motor, throttle-independent]
+V_required = I&middot;(R_motor+R_esc) + 60&middot;n/K_v               [motor terminal voltage needed]
+throttle   = V_required / V_batt(I_pack, SoC)</div>
+<div class="callout"><b>Throttle model: linear/resistive ESC, not a switching buck converter.</b>
+Partial throttle is modeled as the ESC dropping the excess voltage (V<sub>batt</sub> &minus;
+V<sub>required</sub>) resistively, so pack current equals motor current exactly as at WOT
+(I<sub>pack</sub> = motor_count &times; I, no step-down). This is a conservative (pessimistic)
+assumption for partial-throttle battery draw and endurance &mdash; a real switching ESC draws less
+pack current than motor current at partial throttle (I<sub>pack</sub> &asymp; duty &times; I<sub>motor</sub>
+for an ideal lossless buck). Upgrade path if endurance estimates need to be tighter: model
+duty = V<sub>required</sub>/V<sub>batt</sub> explicitly and scale I<sub>pack</sub> by it.</div>
+<h3>Endurance and range</h3>
+<div class="eq">endurance = SoC&#8320; &middot; capacity_Ah / I_pack &middot; 3600        [s]
+range     = endurance &middot; V_cruise                        [m]</div>
+<p>Endurance is reported only when the battery model exposes a finite <code>capacity_ah</code> (the
+measured-curve model may not).</p>
+<h3>Cruise envelope (for plotting)</h3>
+<p><code>cruise_envelope()</code> re-solves the equilibrium above at each airspeed in a caller-supplied
+list &mdash; it is a thin wrapper (<code>dataclasses.replace</code> on <code>v_cruise_m_s</code>, no new
+physics) used by the GUI's Cruise Detail tab to plot how thrust, throttle, current, and efficiency
+vary across a speed range around the configured cruise velocity, since a single candidate otherwise
+yields only one point.</p>
+
+<h2 id="closedform">13. Closed-Form Quick Estimate</h2>
 <p>A single-point, constant-acceleration estimate shown live on the Aircraft &amp; Requirement tab
 &mdash; not a substitute for the full integration, but immediately shows which term (inertia, drag,
 friction) dominates the requirement as inputs change.</p>
@@ -412,14 +465,16 @@ q&#772;    = 0.5&middot;&rho;&middot;V_eff&sup2;
 T_req &asymp; m&middot;V_T&sup2;/(2s)  +  q&#772;&middot;S&middot;C_D  +  &mu;&middot;(m&middot;g &minus; q&#772;&middot;S&middot;C_L)
           (inertia)         (drag)           (friction)</div>
 
-<h2 id="filters" class="pagebreak">13. Candidate Filters</h2>
-<p>Every candidate is scored against all 8 filters and reported in full &mdash; failures are never
-hard-dropped, so a combination that misses one filter by a hair stays visible next to one that
-misses badly. Source: <code>core/candidate.py</code>.</p>
+<h2 id="filters" class="pagebreak">14. Candidate Filters</h2>
+<p>Every candidate is scored against every filter for its mode and reported in full &mdash; failures
+are never hard-dropped, so a combination that misses one filter by a hair stays visible next to one
+that misses badly.</p>
+<h3>Takeoff filters (9, source: <code>core/candidate.py</code>)</h3>
 <table>
 <tr><th>Filter</th><th>Check</th><th>Threshold source</th></tr>
 <tr><td><code>tip_mach</code></td><td>M<sub>tip</sub> = &radic;((&pi;nD)&sup2;+V&sup2;)/a &le; limit, max over 0&ndash;1.2V<sub>T</sub></td><td>user, default 0.75</td></tr>
-<tr><td><code>current_per_motor</code></td><td>max per-motor I &le; min(motor I<sub>max,cont</sub>, ESC I<sub>cont</sub>)</td><td>motor library + ESC field</td></tr>
+<tr><td><code>current_per_motor</code></td><td>max per-motor I &le; motor I<sub>max,cont</sub></td><td>motor library</td></tr>
+<tr><td><code>current_esc</code></td><td>max per-motor I &le; ESC I<sub>cont</sub> (separate filter &mdash; see &sect;10 callout on why these aren't collapsed with min())</td><td>ESC field</td></tr>
 <tr><td><code>current_pack</code></td><td>max pack I &le; C-rate &times; capacity</td><td>battery C-rate field</td></tr>
 <tr><td><code>power</code></td><td>max total P<sub>elec</sub> &le; limit</td><td>user, optional (unlimited by default)</td></tr>
 <tr><td><code>pitch_speed</code></td><td>informational: V<sub>pitch</sub>/V<sub>T</sub> at V<sub>T</sub>, V<sub>pitch</sub>=n&middot;pitch</td><td>&mdash; (no pass/fail)</td></tr>
@@ -427,8 +482,25 @@ misses badly. Source: <code>core/candidate.py</code>.</p>
 <tr><td><code>prop_efficiency</code></td><td>informational: peak &eta;<sub>prop</sub> and &eta;<sub>prop</sub> at V<sub>T</sub></td><td>&mdash; (no pass/fail)</td></tr>
 <tr><td><code>distance</code></td><td>ground-roll s &le; allowed distance, margin % reported</td><td>user (Tab 1)</td></tr>
 </table>
+<h3>Cruise filters (9, source: <code>core/cruise.py</code>)</h3>
+<p>Same <code>FilterResult</code> framework and hard/soft convention as takeoff (&sect;14 above); the
+per-motor/pack current split (&sect;10) and current/power filters carry over unchanged. Two are new:
+<code>cruise_solve</code> reports whether an equilibrium exists at all, and <code>endurance</code> is
+cruise's hard "mission" filter, playing the same role <code>distance</code> plays for takeoff.</p>
+<table>
+<tr><th>Filter</th><th>Check</th><th>Threshold source</th></tr>
+<tr><td><code>cruise_solve</code></td><td>an equilibrium operating point exists at V<sub>cruise</sub> (thrust-matched n found, WOT thrust &ge; required)</td><td>&mdash; (structural)</td></tr>
+<tr><td><code>tip_mach</code></td><td>M<sub>tip</sub> at the solved cruise n &le; limit</td><td>user, default 0.75</td></tr>
+<tr><td><code>current_per_motor</code></td><td>cruise I &le; motor I<sub>max,cont</sub></td><td>motor library</td></tr>
+<tr><td><code>current_esc</code></td><td>cruise I &le; ESC I<sub>cont</sub> (separate filter, same split rationale as &sect;10)</td><td>ESC field</td></tr>
+<tr><td><code>current_pack</code></td><td>cruise I<sub>pack</sub> &le; C-rate &times; capacity</td><td>battery C-rate field</td></tr>
+<tr><td><code>power</code></td><td>battery-side P<sub>elec</sub> at cruise &le; limit</td><td>user, optional</td></tr>
+<tr><td><code>endurance</code></td><td>endurance &ge; required (&sect;12)</td><td>user, optional (unlimited by default)</td></tr>
+<tr><td><code>motor_efficiency</code></td><td>&eta;<sub>motor</sub> at cruise &ge; threshold</td><td>user, default 0.75</td></tr>
+<tr><td><code>prop_efficiency</code></td><td>informational: &eta;<sub>prop</sub> at cruise</td><td>&mdash; (no pass/fail)</td></tr>
+</table>
 
-<h2 id="momentum">14. Momentum-Theory Cross-Check</h2>
+<h2 id="momentum">15. Momentum-Theory Cross-Check</h2>
 <div class="eq">T_static = FM &middot; (2&middot;&rho;&middot;A)^(1/3) &middot; P_shaft^(2/3),     FM &isin; [0.4, 0.75]</div>
 <p>Computed per-motor at the static (V=0) point and compared against the solved static thrust; if
 outside the band, a warning is attached to the candidate ("check propeller data and units") &mdash; it is
@@ -437,22 +509,32 @@ actuator-disk theory. For multi-motor candidates, aggregate thrust/power are div
 per-motor values first: because T &prop; P^(2/3) is a nonlinear (not proportional) relationship,
 checking totals directly would bias the band by motor_count^(1/3).</p>
 
-<h2 id="assumptions" class="pagebreak">15. Assumptions &amp; Limitations</h2>
+<h2 id="assumptions" class="pagebreak">16. Assumptions &amp; Limitations</h2>
 <div class="assume"><b>Quasi-steady propulsion.</b> Motor and propeller are assumed to reach their
-equilibrium operating point instantly at every airspeed step &mdash; no rotational inertia, spool-up
-lag, or throttle transient is modeled.</div>
+equilibrium operating point instantly at every airspeed step (or, for cruise, at the single solved
+equilibrium) &mdash; no rotational inertia, spool-up lag, or throttle transient is modeled.</div>
 <div class="assume"><b>No unsteady aerodynamics; only the wing sees ground effect.</b> The optional
-ground-effect correction reduces wing induced drag near the runway; the propeller's own thrust/power
-coefficients are not corrected for proximity to the ground.</div>
+ground-effect correction reduces wing induced drag near the runway (takeoff only); the propeller's
+own thrust/power coefficients are not corrected for proximity to the ground.</div>
 <div class="assume"><b>Rigid, flat, level runway; one rolling-friction coefficient</b> for the entire
 roll (surface presets: pavement 0.02, hard turf 0.05, short grass 0.08, mown grass 0.10, tall grass
-0.15). No wind, no gusts, no crosswind.</div>
+0.15). No wind, no gusts, no crosswind. (Takeoff only &mdash; cruise has no runway.)</div>
 <div class="assume"><b>Symmetric multi-motor.</b> N identical units, perfectly balanced load sharing,
 one shared pack/bus voltage. Asymmetric installations (different motors/props per position) are not
-modeled.</div>
+modeled. Applies identically to cruise (&sect;12).</div>
 <div class="assume"><b>Battery.</b> The internal-resistance model is linear with SoC-only voltage
-sag &mdash; no thermal effects, no C-rate-dependent resistance, no capacity fade. The measured-curve model
-captures real nonlinearity but is frozen at whatever SoC it was recorded at.</div>
+sag &mdash; <code>R_internal</code> is a single constant, not itself SoC- or temperature-dependent, so
+the model cannot show the resistance rise (and worse sag) real packs exhibit late in discharge or
+when cold. No thermal effects, no capacity fade. The measured-curve model captures real nonlinearity
+but is frozen at whatever SoC it was recorded at. <i>Deliberate scope choice, not an oversight</i>: a
+full electrochemical model (e.g. PyBaMM) would replace an O(&micro;s) algebraic lookup with a per-point
+PDE solve, which is incompatible with sweeping dozens-to-hundreds of candidates interactively; an
+SoC-indexed resistance table (same <code>PchipInterpolator</code> pattern as the OCV table) is the
+identified upgrade path if this fidelity gap matters.</div>
+<div class="assume"><b>Cruise throttle model.</b> Partial throttle is modeled as the ESC dropping
+excess voltage resistively rather than as a switching buck converter &mdash; pack current equals motor
+current at any throttle setting, not <code>duty &times; I_motor</code>. Conservative (pessimistic) for
+partial-throttle endurance/range estimates (&sect;12).</div>
 <div class="assume"><b>Propeller data validity.</b> Tabulated C<sub>T</sub>/C<sub>P</sub> curves are assumed
 valid across the solved J range at whatever Reynolds number the operating point implies. The loader
 explicitly flags (rather than silently accepts) RPM-block disagreement from real Reynolds effects at
@@ -461,38 +543,44 @@ low RPM (&sect;8).</div>
 doesn't have &mdash; flat regions in coarse or rounded published propeller data (e.g. APC's 4-decimal
 C<sub>P</sub>) appear as genuinely flat solved n(V)/I(V), not solver error (&sect;8).</div>
 <div class="assume"><b>Ground roll ends at V<sub>T</sub></b> (rotation/target speed), not the full liftoff
-transition, flare, or climb-out.</div>
+transition, flare, or climb-out. Cruise is evaluated only at the configured cruise velocity/altitude,
+not as a full mission profile (climb, descent, reserve).</div>
 <div class="assume"><b>No CG shift, aeroelastic effects, or propeller wake interference</b> between
 multiple motors on one airframe.</div>
 
-<h2 id="validation">16. Validation</h2>
+<h2 id="validation">17. Validation</h2>
 <table>
 <tr><th>Check</th><th>Result</th></tr>
 <tr><td>Hand-calc closed-form case (m=8kg, S=0.65m&sup2;, V<sub>T</sub>=15m/s, s=30.5m, &rho;=1.16)</td><td>T<sub>req</sub>=38.6N reproduced exactly (inertia 76%, drag 10%, friction 14%)</td></tr>
 <tr><td>Momentum-theory D&#8319;&#8321;&#8320;&#0179; scaling (P=750W, FM=0.55, &rho;=1.16, D=16in&rarr;22in)</td><td>30.4N &rarr; 37.6N, a 24% gain, matches spec</td></tr>
 <tr><td>Analytical ground-roll check (T=const, D=0, &mu;=0)</td><td>reproduces s = mV<sub>T</sub>&sup2;/2T to &lt;0.1%</td></tr>
 <tr><td>Regression fixture</td><td>real APC 10x7 propeller + real AXI 2820/10 motor, outputs locked to specific values</td></tr>
-<tr><td>Automated test suite</td><td>113 tests across every module in <code>core/</code>, <code>data/</code>, and <code>project.py</code></td></tr>
+<tr><td>Cruise equilibrium check</td><td>solved cruise thrust reproduces the independently-computed C<sub>L</sub>/C<sub>D</sub> drag exactly; throttle-down and infeasible (thrust-exceeds-WOT) cases both return structured, never-raise results</td></tr>
+<tr><td>Automated test suite</td><td>123 tests across every module in <code>core/</code>, <code>data/</code>, and <code>project.py</code></td></tr>
 </table>
 
-<h2 id="reference">17. Module Reference</h2>
+<h2 id="reference">18. Module Reference</h2>
 <pre class="code">propselect/
   core/
     atmosphere.py      ISA density, pressure, speed of sound
     battery.py         internal-resistance & measured-curve pack models
     motor.py           BLDC torque/back-emf relations (direct drive)
     propeller.py       C_T(J)/C_P(J) interpolation, thrust/power/torque, momentum theory
-    operating_point.py the coupled 1-D root-find solver (single airspeed)
+    operating_point.py the coupled 1-D root-find solver (single airspeed, full throttle)
     takeoff.py         ground-roll trapezoidal integration, SoC feedback, closed-form estimate
-    candidate.py       per-candidate evaluation: ground roll + diagnostic sweep + 8 filters
+    candidate.py       per-candidate takeoff evaluation: ground roll + diagnostic sweep + 9 filters
+    cruise.py          steady level-flight (T=D) equilibrium solve + 9 filters + envelope sweep
   data/
     loaders.py         APC .dat / UIUC / CSV import with validation
-    motors.json         bundled motor library
-    props/              bundled APC propeller data files
-  project.py           JSON-serializable input model (GUI/CLI shared)
-  main.py              CLI (`propselect cli`) and GUI launcher (`propselect gui`)
-  gui/                 PySide6 desktop application, 7 tabs
-  tests/               113 automated tests</pre>
+    motors.json         bundled motor library (29 motors)
+    props/              bundled APC propeller data files (72 props)
+  project.py           JSON-serializable input model (GUI/CLI shared, takeoff + cruise)
+  main.py              CLI (`propselect cli --mode takeoff|cruise|both`) and GUI launcher (`propselect gui`)
+  gui/                 PySide6 desktop application, 10 tabs:
+                          1-4  Aircraft/Requirement, Battery/ESC, Motor Library, Propeller Library
+                          5-7  Sweep & Results, Detail, Comparison            (takeoff)
+                          8-10 Cruise, Cruise Detail, Cruise Comparison       (cruise)
+  tests/               123 automated tests</pre>
 
 <p class="small" style="margin-top:24px;">Generated from the propselect source tree. Every equation
 above is transcribed directly from the corresponding module's implementation, not from a separate
